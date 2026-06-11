@@ -1,36 +1,33 @@
+from PyQt6.QtCore import QSortFilterProxyModel, Qt, QModelIndex
 from rapidfuzz import fuzz
 
-class FiltroFuzzyProxyModel:
-    def __init__(self, vista, modelo):
-        self._vista = vista
-        self._modelo = modelo
-        self._texto = ""
-        self._umbral = 60
+class FiltroFuzzyProxyModel(QSortFilterProxyModel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._umbral = 85
+        self._texto_busqueda = ""
 
-    def aplicar_filtro(self, texto):
-        self._texto = texto.lower().strip()
-        self._refrescar_visibilidad(self._modelo.invisibleRootItem())
+    def set_texto_busqueda(self, texto: str):
+        self._texto_busqueda = texto.lower().strip()
+        self.invalidateFilter() # Fuerza a reevaluar todo el árbol
 
-    def _refrescar_visibilidad(self, nodo):
-        for i in range(nodo.rowCount()):
-            hijo = nodo.child(i)
-            _actualizar_visibilidad_hijo(hijo, self._texto, self._umbral)
-            self._refrescar_visibilidad(hijo)
-
-def _actualizar_visibilidad_hijo(hijo, texto, umbral):
-    if not texto:
-        hijo._es_visible = True
-    else:
-        nombre = hijo.text().lower()
-        puntaje = fuzz.partial_ratio(texto, nombre)
-        hijo._es_visible = puntaje >= umbral or _tiene_descendiente_visible(hijo, texto, umbral)
-
-def _tiene_descendiente_visible(nodo, texto, umbral):
-    for i in range(nodo.rowCount()):
-        hijo = nodo.child(i)
-        nombre = hijo.text().lower()
-        if fuzz.partial_ratio(texto, nombre) >= umbral:
+    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
+        # Si no hay búsqueda, mostrar todo
+        if not self._texto_busqueda:
             return True
-        if _tiene_descendiente_visible(hijo, texto, umbral):
+        
+        modelo_origen = self.sourceModel()
+        indice = modelo_origen.index(source_row, 0, source_parent)
+        
+        # 1. Comprobar si el elemento actual coincide
+        texto_item = str(modelo_origen.data(indice, Qt.ItemDataRole.DisplayRole)).lower()
+        if fuzz.partial_ratio(self._texto_busqueda, texto_item) >= self._umbral:
             return True
-    return False
+        
+        # 2. Comprobar si algún hijo coincide (para mantener visible a los padres)
+        if modelo_origen.hasChildren(indice):
+            for i in range(modelo_origen.rowCount(indice)):
+                if self.filterAcceptsRow(i, indice):
+                    return True
+        
+        return False

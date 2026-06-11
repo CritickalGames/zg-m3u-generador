@@ -10,7 +10,6 @@ from UI.widgets.physical_tree import PanelArbolFisico
 from UI.widgets.status_bar import BarraEstadoCompacta
 from UI.logic.builders.logical import poblar_arbol_logico
 from UI.logic.builders.physical import poblar_arbol_fisico
-from UI.logic.filters.fuzzy_filter import FiltroFuzzyProxyModel
 from UI.exporter.m3u import generar_archivos_m3u
 from core.config_loader import cargar_configuracion, actualizar_ruta_por_defecto
 from scanner.fs import escanear_roms, obtener_arbol_directorios
@@ -31,11 +30,6 @@ class ROMOrganizerApp(QMainWindow):
         self._panel_fisico = PanelArbolFisico()
         self._panel_logico = PanelArbolLogico()
         self._barra_estado = BarraEstadoCompacta()
-        
-        self._filtro = FiltroFuzzyProxyModel(
-            self._panel_logico.obtener_vista(), 
-            self._panel_logico.obtener_modelo()
-        )
 
     def _configurar_ventana(self):
         self.setWindowTitle("🎮 ROM Organizer & M3U Generator")
@@ -66,7 +60,8 @@ class ROMOrganizerApp(QMainWindow):
         self._barra_superior.conectar_buscar(self._seleccionar_carpeta)
         self._barra_superior.conectar_escanear(self._ejecutar_escaneo)
         self._barra_superior.conectar_generar(self._ejecutar_generacion)
-        self._panel_logico.conectar_busqueda(self._filtro.aplicar_filtro)
+        # Conexión directa al método filtrar del panel
+        self._panel_logico._buscador.textChanged.connect(self._panel_logico.filtrar)
 
     def _precargar_ruta(self):
         ruta = self._config.get("ruta_por_defecto", "")
@@ -78,10 +73,8 @@ class ROMOrganizerApp(QMainWindow):
             self._barra_superior.establecer_ruta(ruta)
 
     def _seleccionar_carpeta(self):
-        # Se pasa la ruta por defecto como directorio inicial del diálogo
         ruta_inicial = self._config.get("ruta_por_defecto", "")
         ruta = QFileDialog.getExistingDirectory(self, "Seleccionar carpeta de ROMs", ruta_inicial)
-        
         if ruta:
             self._barra_superior.establecer_ruta(ruta)
             self._barra_superior.activar_botones()
@@ -109,7 +102,8 @@ class ROMOrganizerApp(QMainWindow):
             grupos = agrupar_roms_fuzzy(archivos, self._config["umbral_fuzzy"])
             
             poblar_arbol_fisico(self._panel_fisico.obtener_modelo(), arbol)
-            poblar_arbol_logico(self._panel_logico.obtener_modelo(), grupos)
+            # Poblar el modelo fuente, no el de la vista
+            poblar_arbol_logico(self._panel_logico.obtener_modelo_fuente(), grupos)
             
             self._panel_logico.expandir_todo()
             self._barra_estado.mostrar_mensaje(f"Listo. {len(archivos)} ROMs agrupadas.")
@@ -123,7 +117,7 @@ class ROMOrganizerApp(QMainWindow):
             return
         try:
             fran, games, dir_salida = generar_archivos_m3u(
-                self._panel_logico.obtener_modelo(),
+                self._panel_logico.obtener_modelo_fuente(), # Exportar desde el modelo fuente completo
                 ruta_base,
                 destino,
                 self._config.get("m3u_solo_multidisco", False)

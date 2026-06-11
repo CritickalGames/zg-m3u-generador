@@ -1,6 +1,7 @@
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTreeView, QLineEdit, QHeaderView, QAbstractItemView
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QStandardItemModel
+from UI.logic.filters.fuzzy_filter import FiltroFuzzyProxyModel
 
 class PanelArbolLogico(QWidget):
     def __init__(self):
@@ -8,11 +9,17 @@ class PanelArbolLogico(QWidget):
         self._buscador = QLineEdit()
         self._buscador.setPlaceholderText("🔍 Buscar franquicia o juego...")
         
-        self._modelo = QStandardItemModel()
-        self._modelo.setHorizontalHeaderLabels(["🔍 Vista Lógica (Estructura agrupada)"])
+        # Modelo fuente (contiene todos los datos)
+        self._modelo_fuente = QStandardItemModel()
+        self._modelo_fuente.setHorizontalHeaderLabels(["🔍 Vista Lógica (Estructura agrupada)"])
         
+        # Modelo proxy (filtra lo que ve el usuario)
+        self._filtro = FiltroFuzzyProxyModel()
+        self._filtro.setSourceModel(self._modelo_fuente)
+        
+        # La vista se conecta al proxy, no al modelo fuente
         self._vista = QTreeView()
-        self._vista.setModel(self._modelo)
+        self._vista.setModel(self._filtro)
         self._vista.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.EditKeyPressed)
         self._vista.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self._vista.setDefaultDropAction(Qt.DropAction.MoveAction)
@@ -30,14 +37,15 @@ class PanelArbolLogico(QWidget):
         layout.addWidget(self._vista)
         self.setLayout(layout)
 
-    def obtener_modelo(self):
-        return self._modelo
+    def obtener_modelo_fuente(self):
+        return self._modelo_fuente
 
     def obtener_vista(self):
         return self._vista
 
-    def conectar_busqueda(self, funcion):
-        self._buscador.textChanged.connect(funcion)
+    def filtrar(self, texto: str):
+        self._filtro.set_texto_busqueda(texto)
 
     def expandir_todo(self):
+        # Expandimos la vista (que muestra el proxy)
         self._vista.expandAll()

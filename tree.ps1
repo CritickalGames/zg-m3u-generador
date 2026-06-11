@@ -16,7 +16,103 @@ Write-Host "🚀 Iniciando construcción del proyecto..." -ForegroundColor Cyan
 Write-Host "----------------------------------------------------" -ForegroundColor DarkGray
 
 # ==============================================================================
-# SRC/APP.PY (Método _seleccionar_carpeta actualizado)
+# SRC/UI/LOGIC/FILTERS/FUZZY_FILTER.PY (Proxy Model real y funcional)
+# ==============================================================================
+Set-File "src/UI/logic/filters/fuzzy_filter.py" @'
+from PyQt6.QtCore import QSortFilterProxyModel, Qt, QModelIndex
+from rapidfuzz import fuzz
+
+class FiltroFuzzyProxyModel(QSortFilterProxyModel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._umbral = 60
+        self._texto_busqueda = ""
+
+    def set_texto_busqueda(self, texto: str):
+        self._texto_busqueda = texto.lower().strip()
+        self.invalidateFilter() # Fuerza a reevaluar todo el árbol
+
+    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
+        # Si no hay búsqueda, mostrar todo
+        if not self._texto_busqueda:
+            return True
+        
+        modelo_origen = self.sourceModel()
+        indice = modelo_origen.index(source_row, 0, source_parent)
+        
+        # 1. Comprobar si el elemento actual coincide
+        texto_item = str(modelo_origen.data(indice, Qt.ItemDataRole.DisplayRole)).lower()
+        if fuzz.partial_ratio(self._texto_busqueda, texto_item) >= self._umbral:
+            return True
+        
+        # 2. Comprobar si algún hijo coincide (para mantener visible a los padres)
+        if modelo_origen.hasChildren(indice):
+            for i in range(modelo_origen.rowCount(indice)):
+                if self.filterAcceptsRow(i, indice):
+                    return True
+        
+        return False
+'@
+
+# ==============================================================================
+# SRC/UI/WIDGETS/LOGICAL_TREE.PY (Integración del Proxy Model)
+# ==============================================================================
+Set-File "src/UI/widgets/logical_tree.py" @'
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTreeView, QLineEdit, QHeaderView, QAbstractItemView
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QStandardItemModel
+from UI.logic.filters.fuzzy_filter import FiltroFuzzyProxyModel
+
+class PanelArbolLogico(QWidget):
+    def __init__(self):
+        super().__init__()
+        self._buscador = QLineEdit()
+        self._buscador.setPlaceholderText("🔍 Buscar franquicia o juego...")
+        
+        # Modelo fuente (contiene todos los datos)
+        self._modelo_fuente = QStandardItemModel()
+        self._modelo_fuente.setHorizontalHeaderLabels(["🔍 Vista Lógica (Estructura agrupada)"])
+        
+        # Modelo proxy (filtra lo que ve el usuario)
+        self._filtro = FiltroFuzzyProxyModel()
+        self._filtro.setSourceModel(self._modelo_fuente)
+        
+        # La vista se conecta al proxy, no al modelo fuente
+        self._vista = QTreeView()
+        self._vista.setModel(self._filtro)
+        self._vista.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.EditKeyPressed)
+        self._vista.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self._vista.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self._vista.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._vista.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self._vista.setAnimated(True)
+        
+        self._configurar_layout()
+
+    def _configurar_layout(self):
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self._buscador)
+        layout.addWidget(self._vista)
+        self.setLayout(layout)
+
+    def obtener_modelo_fuente(self):
+        return self._modelo_fuente
+
+    def obtener_vista(self):
+        return self._vista
+
+    def filtrar(self, texto: str):
+        self._filtro.set_texto_busqueda(texto)
+
+    def expandir_todo(self):
+        # Expandimos la vista (que muestra el proxy)
+        self._vista.expandAll()
+'@
+
+# ==============================================================================
+# SRC/APP.PY (Conexión corregida al nuevo método filtrar)
 # ==============================================================================
 Set-File "src/app.py" @'
 import os
@@ -31,7 +127,6 @@ from UI.widgets.physical_tree import PanelArbolFisico
 from UI.widgets.status_bar import BarraEstadoCompacta
 from UI.logic.builders.logical import poblar_arbol_logico
 from UI.logic.builders.physical import poblar_arbol_fisico
-from UI.logic.filters.fuzzy_filter import FiltroFuzzyProxyModel
 from UI.exporter.m3u import generar_archivos_m3u
 from core.config_loader import cargar_configuracion, actualizar_ruta_por_defecto
 from scanner.fs import escanear_roms, obtener_arbol_directorios
@@ -52,11 +147,6 @@ class ROMOrganizerApp(QMainWindow):
         self._panel_fisico = PanelArbolFisico()
         self._panel_logico = PanelArbolLogico()
         self._barra_estado = BarraEstadoCompacta()
-        
-        self._filtro = FiltroFuzzyProxyModel(
-            self._panel_logico.obtener_vista(), 
-            self._panel_logico.obtener_modelo()
-        )
 
     def _configurar_ventana(self):
         self.setWindowTitle("🎮 ROM Organizer & M3U Generator")
@@ -87,7 +177,8 @@ class ROMOrganizerApp(QMainWindow):
         self._barra_superior.conectar_buscar(self._seleccionar_carpeta)
         self._barra_superior.conectar_escanear(self._ejecutar_escaneo)
         self._barra_superior.conectar_generar(self._ejecutar_generacion)
-        self._panel_logico.conectar_busqueda(self._filtro.aplicar_filtro)
+        # Conexión directa al método filtrar del panel
+        self._panel_logico._buscador.textChanged.connect(self._panel_logico.filtrar)
 
     def _precargar_ruta(self):
         ruta = self._config.get("ruta_por_defecto", "")
@@ -99,10 +190,8 @@ class ROMOrganizerApp(QMainWindow):
             self._barra_superior.establecer_ruta(ruta)
 
     def _seleccionar_carpeta(self):
-        # Se pasa la ruta por defecto como directorio inicial del diálogo
         ruta_inicial = self._config.get("ruta_por_defecto", "")
         ruta = QFileDialog.getExistingDirectory(self, "Seleccionar carpeta de ROMs", ruta_inicial)
-        
         if ruta:
             self._barra_superior.establecer_ruta(ruta)
             self._barra_superior.activar_botones()
@@ -130,7 +219,8 @@ class ROMOrganizerApp(QMainWindow):
             grupos = agrupar_roms_fuzzy(archivos, self._config["umbral_fuzzy"])
             
             poblar_arbol_fisico(self._panel_fisico.obtener_modelo(), arbol)
-            poblar_arbol_logico(self._panel_logico.obtener_modelo(), grupos)
+            # Poblar el modelo fuente, no el de la vista
+            poblar_arbol_logico(self._panel_logico.obtener_modelo_fuente(), grupos)
             
             self._panel_logico.expandir_todo()
             self._barra_estado.mostrar_mensaje(f"Listo. {len(archivos)} ROMs agrupadas.")
@@ -144,7 +234,7 @@ class ROMOrganizerApp(QMainWindow):
             return
         try:
             fran, games, dir_salida = generar_archivos_m3u(
-                self._panel_logico.obtener_modelo(),
+                self._panel_logico.obtener_modelo_fuente(), # Exportar desde el modelo fuente completo
                 ruta_base,
                 destino,
                 self._config.get("m3u_solo_multidisco", False)
