@@ -1,0 +1,14 @@
+{
+    "ruta_por_defecto": "E:/ARCADES/RetroBat/ROMs/psp",
+    "escaneo_recursivo": true,
+    "extensiones_soportadas": [
+        ".chd",
+        ".cso",
+        ".pbp",
+        ".iso",
+        ".bin"
+    ],
+    "umbral_fuzzy": 75,
+    "directorio_salida_m3u": "E:\\ARCADES\\RetroBat\\ROMs\\psp",
+    "m3u_solo_multidisco": false
+}
