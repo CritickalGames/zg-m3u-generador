@@ -10,6 +10,9 @@ from UI.widgets.physical_tree import PanelArbolFisico
 from UI.widgets.status_bar import BarraEstadoCompacta
 from UI.logic.builders.logical import poblar_arbol_logico
 from UI.logic.builders.physical import poblar_arbol_fisico
+from UI.logic.actions.clipboard import PortapapelesInterno
+from UI.logic.actions.tree_editor import EditorArbol
+from UI.logic.actions.shortcuts import configurar_atajos
 from UI.exporter.m3u import generar_archivos_m3u
 from core.config_loader import cargar_configuracion, actualizar_ruta_por_defecto
 from scanner.fs import escanear_roms, obtener_arbol_directorios
@@ -30,6 +33,13 @@ class ROMOrganizerApp(QMainWindow):
         self._panel_fisico = PanelArbolFisico()
         self._panel_logico = PanelArbolLogico()
         self._barra_estado = BarraEstadoCompacta()
+        
+        self._portapapeles = PortapapelesInterno()
+        self._editor = EditorArbol(
+            self._panel_logico.obtener_vista(),
+            self._panel_logico.obtener_modelo_fuente(),
+            self._portapapeles
+        )
 
     def _configurar_ventana(self):
         self.setWindowTitle("🎮 ROM Organizer & M3U Generator")
@@ -60,8 +70,10 @@ class ROMOrganizerApp(QMainWindow):
         self._barra_superior.conectar_buscar(self._seleccionar_carpeta)
         self._barra_superior.conectar_escanear(self._ejecutar_escaneo)
         self._barra_superior.conectar_generar(self._ejecutar_generacion)
-        # Conexión directa al método filtrar del panel
         self._panel_logico._buscador.textChanged.connect(self._panel_logico.filtrar)
+        
+        # Activar atajos
+        configurar_atajos(self, self._editor)
 
     def _precargar_ruta(self):
         ruta = self._config.get("ruta_por_defecto", "")
@@ -102,7 +114,6 @@ class ROMOrganizerApp(QMainWindow):
             grupos = agrupar_roms_fuzzy(archivos, self._config["umbral_fuzzy"])
             
             poblar_arbol_fisico(self._panel_fisico.obtener_modelo(), arbol)
-            # Poblar el modelo fuente, no el de la vista
             poblar_arbol_logico(self._panel_logico.obtener_modelo_fuente(), grupos)
             
             self._panel_logico.expandir_todo()
@@ -117,7 +128,7 @@ class ROMOrganizerApp(QMainWindow):
             return
         try:
             fran, games, dir_salida = generar_archivos_m3u(
-                self._panel_logico.obtener_modelo_fuente(), # Exportar desde el modelo fuente completo
+                self._panel_logico.obtener_modelo_fuente(),
                 ruta_base,
                 destino,
                 self._config.get("m3u_solo_multidisco", False)

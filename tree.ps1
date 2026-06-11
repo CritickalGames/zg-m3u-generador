@@ -16,103 +16,244 @@ Write-Host "🚀 Iniciando construcción del proyecto..." -ForegroundColor Cyan
 Write-Host "----------------------------------------------------" -ForegroundColor DarkGray
 
 # ==============================================================================
-# SRC/UI/LOGIC/FILTERS/FUZZY_FILTER.PY (Proxy Model real y funcional)
+# SRC/UI/LOGIC/ACTIONS/SHORTCUTS.PY
 # ==============================================================================
-Set-File "src/UI/logic/filters/fuzzy_filter.py" @'
-from PyQt6.QtCore import QSortFilterProxyModel, Qt, QModelIndex
-from rapidfuzz import fuzz
+Set-File "src/UI/logic/actions/shortcuts.py" @'
+from PyQt6.QtGui import QKeySequence, QShortcut
 
-class FiltroFuzzyProxyModel(QSortFilterProxyModel):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._umbral = 60
-        self._texto_busqueda = ""
+def configurar_atajos(ventana, editor):
+    _registrar_atajo(ventana, QKeySequence("Ctrl+Z"), editor.deshacer)
+    _registrar_atajo(ventana, QKeySequence("Ctrl+Y"), editor.rehacer)
+    _registrar_atajo(ventana, QKeySequence("Ctrl+X"), editor.cortar)
+    _registrar_atajo(ventana, QKeySequence("Ctrl+C"), editor.copiar)
+    _registrar_atajo(ventana, QKeySequence("Ctrl+V"), editor.pegar)
+    _registrar_atajo(ventana, QKeySequence("Delete"), editor.eliminar)
+    _registrar_atajo(ventana, QKeySequence("F2"), editor.renombrar)
 
-    def set_texto_busqueda(self, texto: str):
-        self._texto_busqueda = texto.lower().strip()
-        self.invalidateFilter() # Fuerza a reevaluar todo el árbol
-
-    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
-        # Si no hay búsqueda, mostrar todo
-        if not self._texto_busqueda:
-            return True
-        
-        modelo_origen = self.sourceModel()
-        indice = modelo_origen.index(source_row, 0, source_parent)
-        
-        # 1. Comprobar si el elemento actual coincide
-        texto_item = str(modelo_origen.data(indice, Qt.ItemDataRole.DisplayRole)).lower()
-        if fuzz.partial_ratio(self._texto_busqueda, texto_item) >= self._umbral:
-            return True
-        
-        # 2. Comprobar si algún hijo coincide (para mantener visible a los padres)
-        if modelo_origen.hasChildren(indice):
-            for i in range(modelo_origen.rowCount(indice)):
-                if self.filterAcceptsRow(i, indice):
-                    return True
-        
-        return False
+def _registrar_atajo(ventana, secuencia, accion):
+    atajo = QShortcut(secuencia, ventana)
+    atajo.activated.connect(accion)
 '@
 
 # ==============================================================================
-# SRC/UI/WIDGETS/LOGICAL_TREE.PY (Integración del Proxy Model)
+# SRC/UI/LOGIC/ACTIONS/TREE_EDITOR.PY (Adaptado para QSortFilterProxyModel)
 # ==============================================================================
-Set-File "src/UI/widgets/logical_tree.py" @'
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTreeView, QLineEdit, QHeaderView, QAbstractItemView
+Set-File "src/UI/logic/actions/tree_editor.py" @'
+from PyQt6.QtGui import QUndoStack, QStandardItem
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QStandardItemModel
-from UI.logic.filters.fuzzy_filter import FiltroFuzzyProxyModel
+from UI.logic.actions.clipboard import PortapapelesInterno
+from UI.logic.actions.commands.rename import ComandoRenombrar
+from UI.logic.actions.commands.remove import ComandoEliminar
+from UI.logic.actions.commands.cut import ComandoCortar
+from UI.logic.actions.commands.paste import ComandoPegar
 
-class PanelArbolLogico(QWidget):
-    def __init__(self):
-        super().__init__()
-        self._buscador = QLineEdit()
-        self._buscador.setPlaceholderText("🔍 Buscar franquicia o juego...")
+class EditorArbol:
+    def __init__(self, vista, modelo_fuente, portapapeles):
+        self._vista = vista
+        self._modelo_fuente = modelo_fuente
+        self._portapapeles = portapapeles
+        self._pila = QUndoStack()
+
+    def deshacer(self):
+        if self._pila.canUndo():
+            self._pila.undo()
+
+    def rehacer(self):
+        if self._pila.canRedo():
+            self._pila.redo()
+
+    def cortar(self):
+        nodos = self._obtener_nodos_fuente_seleccionados()
+        if nodos:
+            self._portapapeles.guardar_corte(nodos)
+            self._pila.push(ComandoCortar(self._modelo_fuente, nodos))
+
+    def copiar(self):
+        nodos = self._obtener_nodos_fuente_seleccionados()
+        if nodos:
+            self._portapapeles.guardar_copia(nodos)
+
+    def pegar(self):
+        if self._portapapeles.esta_vacio():
+            return
+        destino = self._obtener_destino_fuente()
+        if destino:
+            self._pila.push(ComandoPegar(destino, self._portapapeles.obtener_nodos(), self._portapapeles.obtener_modo()))
+
+    def eliminar(self):
+        nodos = self._obtener_nodos_fuente_seleccionados()
+        if nodos:
+            self._pila.push(ComandoEliminar(self._modelo_fuente, nodos))
+
+    def renombrar(self):
+        indices = self._vista.selectedIndexes()
+        if indices:
+            # Mapear al modelo fuente para editar
+            proxy_index = indices[0]
+            if proxy_index.column() == 0:
+                source_index = self._vista.model().mapToSource(proxy_index)
+                self._vista.edit(source_index)
+
+    def _obtener_nodos_fuente_seleccionados(self):
+        indices = self._vista.selectedIndexes()
+        proxy_model = self._vista.model()
+        nodos = []
+        for i in indices:
+            if i.column() == 0:
+                source_index = proxy_model.mapToSource(i)
+                item = self._modelo_fuente.itemFromIndex(source_index)
+                if item and item not in nodos:
+                    nodos.append(item)
+        return nodos
+
+    def _obtener_destino_fuente(self):
+        indices = self._vista.selectedIndexes()
+        if not indices:
+            return self._modelo_fuente.invisibleRootItem()
         
-        # Modelo fuente (contiene todos los datos)
-        self._modelo_fuente = QStandardItemModel()
-        self._modelo_fuente.setHorizontalHeaderLabels(["🔍 Vista Lógica (Estructura agrupada)"])
-        
-        # Modelo proxy (filtra lo que ve el usuario)
-        self._filtro = FiltroFuzzyProxyModel()
-        self._filtro.setSourceModel(self._modelo_fuente)
-        
-        # La vista se conecta al proxy, no al modelo fuente
-        self._vista = QTreeView()
-        self._vista.setModel(self._filtro)
-        self._vista.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.EditKeyPressed)
-        self._vista.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
-        self._vista.setDefaultDropAction(Qt.DropAction.MoveAction)
-        self._vista.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self._vista.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self._vista.setAnimated(True)
-        
-        self._configurar_layout()
-
-    def _configurar_layout(self):
-        layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(self._buscador)
-        layout.addWidget(self._vista)
-        self.setLayout(layout)
-
-    def obtener_modelo_fuente(self):
-        return self._modelo_fuente
-
-    def obtener_vista(self):
-        return self._vista
-
-    def filtrar(self, texto: str):
-        self._filtro.set_texto_busqueda(texto)
-
-    def expandir_todo(self):
-        # Expandimos la vista (que muestra el proxy)
-        self._vista.expandAll()
+        proxy_model = self._vista.model()
+        source_index = proxy_model.mapToSource(indices[0])
+        item = self._modelo_fuente.itemFromIndex(source_index)
+        return item if item else self._modelo_fuente.invisibleRootItem()
 '@
 
 # ==============================================================================
-# SRC/APP.PY (Conexión corregida al nuevo método filtrar)
+# SRC/UI/LOGIC/ACTIONS/CLIPBOARD.PY
+# ==============================================================================
+Set-File "src/UI/logic/actions/clipboard.py" @'
+class PortapapelesInterno:
+    def __init__(self):
+        self._nodos = []
+        self._modo = None
+
+    def guardar_corte(self, nodos):
+        self._nodos = nodos
+        self._modo = "corte"
+
+    def guardar_copia(self, nodos):
+        self._nodos = nodos
+        self._modo = "copia"
+
+    def obtener_nodos(self):
+        return self._nodos
+
+    def obtener_modo(self):
+        return self._modo
+
+    def esta_vacio(self):
+        return len(self._nodos) == 0
+
+    def limpiar(self):
+        self._nodos = []
+        self._modo = None
+'@
+
+# ==============================================================================
+# SRC/UI/LOGIC/ACTIONS/COMMANDS/RENAME.PY
+# ==============================================================================
+Set-File "src/UI/logic/actions/commands/rename.py" @'
+from PyQt6.QtGui import QUndoCommand
+
+class ComandoRenombrar(QUndoCommand):
+    def __init__(self, nodo, nombre_nuevo):
+        super().__init__("Renombrar")
+        self._nodo = nodo
+        self._nombre_nuevo = nombre_nuevo
+        self._nombre_anterior = nodo.text()
+
+    def redo(self):
+        self._nodo.setText(self._nombre_nuevo)
+
+    def undo(self):
+        self._nodo.setText(self._nombre_anterior)
+'@
+
+# ==============================================================================
+# SRC/UI/LOGIC/ACTIONS/COMMANDS/REMOVE.PY
+# ==============================================================================
+Set-File "src/UI/logic/actions/commands/remove.py" @'
+from PyQt6.QtGui import QUndoCommand
+
+class ComandoEliminar(QUndoCommand):
+    def __init__(self, modelo, nodos):
+        super().__init__("Eliminar")
+        self._modelo = modelo
+        self._nodos = nodos
+        self._padres = [(n.parent() or modelo.invisibleRootItem(), n.row()) for n in nodos]
+
+    def redo(self):
+        for padre, fila in reversed(self._padres):
+            padre.takeRow(fila)
+
+    def undo(self):
+        for (padre, fila), nodo in zip(self._padres, self._nodos):
+            padre.insertRow(fila, nodo)
+'@
+
+# ==============================================================================
+# SRC/UI/LOGIC/ACTIONS/COMMANDS/CUT.PY
+# ==============================================================================
+Set-File "src/UI/logic/actions/commands/cut.py" @'
+from PyQt6.QtGui import QUndoCommand
+
+class ComandoCortar(QUndoCommand):
+    def __init__(self, modelo, nodos):
+        super().__init__("Cortar")
+        self._modelo = modelo
+        self._nodos = nodos
+        self._padres = [(n.parent() or modelo.invisibleRootItem(), n.row()) for n in nodos]
+
+    def redo(self):
+        for padre, fila in reversed(self._padres):
+            padre.takeRow(fila)
+
+    def undo(self):
+        for (padre, fila), nodo in zip(self._padres, self._nodos):
+            padre.insertRow(fila, nodo)
+'@
+
+# ==============================================================================
+# SRC/UI/LOGIC/ACTIONS/COMMANDS/PASTE.PY
+# ==============================================================================
+Set-File "src/UI/logic/actions/commands/paste.py" @'
+from PyQt6.QtGui import QUndoCommand, QStandardItem
+from PyQt6.QtCore import Qt
+
+class ComandoPegar(QUndoCommand):
+    def __init__(self, destino, nodos, modo):
+        super().__init__("Pegar")
+        self._destino = destino
+        self._modo = modo
+        self._copias = [_clonar_nodo(n) for n in nodos]
+        self._filas_insertadas = []
+
+    def redo(self):
+        self._filas_insertadas = []
+        for copia in self._copias:
+            fila = self._destino.rowCount()
+            self._destino.appendRow(copia)
+            self._filas_insertadas.append(fila)
+
+    def undo(self):
+        for fila in reversed(self._filas_insertadas):
+            self._destino.removeRow(fila)
+
+def _clonar_nodo(nodo):
+    copia = QStandardItem(nodo.text())
+    copia.setEditable(nodo.isEditable())
+    # Copiar roles de datos personalizados
+    for rol in [Qt.ItemDataRole.UserRole, Qt.ItemDataRole.UserRole + 1]:
+        dato = nodo.data(rol)
+        if dato is not None:
+            copia.setData(dato, rol)
+    
+    for i in range(nodo.rowCount()):
+        copia.appendRow(_clonar_nodo(nodo.child(i)))
+    return copia
+'@
+
+# ==============================================================================
+# SRC/APP.PY (Integración del Editor y Atajos)
 # ==============================================================================
 Set-File "src/app.py" @'
 import os
@@ -127,6 +268,9 @@ from UI.widgets.physical_tree import PanelArbolFisico
 from UI.widgets.status_bar import BarraEstadoCompacta
 from UI.logic.builders.logical import poblar_arbol_logico
 from UI.logic.builders.physical import poblar_arbol_fisico
+from UI.logic.actions.clipboard import PortapapelesInterno
+from UI.logic.actions.tree_editor import EditorArbol
+from UI.logic.actions.shortcuts import configurar_atajos
 from UI.exporter.m3u import generar_archivos_m3u
 from core.config_loader import cargar_configuracion, actualizar_ruta_por_defecto
 from scanner.fs import escanear_roms, obtener_arbol_directorios
@@ -147,6 +291,13 @@ class ROMOrganizerApp(QMainWindow):
         self._panel_fisico = PanelArbolFisico()
         self._panel_logico = PanelArbolLogico()
         self._barra_estado = BarraEstadoCompacta()
+        
+        self._portapapeles = PortapapelesInterno()
+        self._editor = EditorArbol(
+            self._panel_logico.obtener_vista(),
+            self._panel_logico.obtener_modelo_fuente(),
+            self._portapapeles
+        )
 
     def _configurar_ventana(self):
         self.setWindowTitle("🎮 ROM Organizer & M3U Generator")
@@ -177,8 +328,10 @@ class ROMOrganizerApp(QMainWindow):
         self._barra_superior.conectar_buscar(self._seleccionar_carpeta)
         self._barra_superior.conectar_escanear(self._ejecutar_escaneo)
         self._barra_superior.conectar_generar(self._ejecutar_generacion)
-        # Conexión directa al método filtrar del panel
         self._panel_logico._buscador.textChanged.connect(self._panel_logico.filtrar)
+        
+        # Activar atajos
+        configurar_atajos(self, self._editor)
 
     def _precargar_ruta(self):
         ruta = self._config.get("ruta_por_defecto", "")
@@ -219,7 +372,6 @@ class ROMOrganizerApp(QMainWindow):
             grupos = agrupar_roms_fuzzy(archivos, self._config["umbral_fuzzy"])
             
             poblar_arbol_fisico(self._panel_fisico.obtener_modelo(), arbol)
-            # Poblar el modelo fuente, no el de la vista
             poblar_arbol_logico(self._panel_logico.obtener_modelo_fuente(), grupos)
             
             self._panel_logico.expandir_todo()
@@ -234,7 +386,7 @@ class ROMOrganizerApp(QMainWindow):
             return
         try:
             fran, games, dir_salida = generar_archivos_m3u(
-                self._panel_logico.obtener_modelo_fuente(), # Exportar desde el modelo fuente completo
+                self._panel_logico.obtener_modelo_fuente(),
                 ruta_base,
                 destino,
                 self._config.get("m3u_solo_multidisco", False)

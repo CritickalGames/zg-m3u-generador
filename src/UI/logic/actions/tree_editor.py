@@ -1,8 +1,15 @@
-from PyQt6.QtGui import QUndoStack
+from PyQt6.QtGui import QUndoStack, QStandardItem
+from PyQt6.QtCore import Qt
+from UI.logic.actions.clipboard import PortapapelesInterno
+from UI.logic.actions.commands.rename import ComandoRenombrar
+from UI.logic.actions.commands.remove import ComandoEliminar
+from UI.logic.actions.commands.cut import ComandoCortar
+from UI.logic.actions.commands.paste import ComandoPegar
 
 class EditorArbol:
-    def __init__(self, vista, portapapeles):
+    def __init__(self, vista, modelo_fuente, portapapeles):
         self._vista = vista
+        self._modelo_fuente = modelo_fuente
         self._portapapeles = portapapeles
         self._pila = QUndoStack()
 
@@ -15,42 +22,55 @@ class EditorArbol:
             self._pila.redo()
 
     def cortar(self):
-        nodos = self._obtener_nodos_seleccionados()
+        nodos = self._obtener_nodos_fuente_seleccionados()
         if nodos:
             self._portapapeles.guardar_corte(nodos)
+            self._pila.push(ComandoCortar(self._modelo_fuente, nodos))
+
+    def copiar(self):
+        nodos = self._obtener_nodos_fuente_seleccionados()
+        if nodos:
+            self._portapapeles.guardar_copia(nodos)
 
     def pegar(self):
         if self._portapapeles.esta_vacio():
             return
-        destino = self._obtener_destino()
+        destino = self._obtener_destino_fuente()
         if destino:
-            _ejecutar_pegado(self._pila, self._vista, self._portapapeles, destino)
+            self._pila.push(ComandoPegar(destino, self._portapapeles.obtener_nodos(), self._portapapeles.obtener_modo()))
 
     def eliminar(self):
-        nodos = self._obtener_nodos_seleccionados()
+        nodos = self._obtener_nodos_fuente_seleccionados()
         if nodos:
-            _ejecutar_eliminacion(self._pila, self._vista, nodos)
+            self._pila.push(ComandoEliminar(self._modelo_fuente, nodos))
 
     def renombrar(self):
         indices = self._vista.selectedIndexes()
         if indices:
-            self._vista.edit(indices[0])
+            # Mapear al modelo fuente para editar
+            proxy_index = indices[0]
+            if proxy_index.column() == 0:
+                source_index = self._vista.model().mapToSource(proxy_index)
+                self._vista.edit(source_index)
 
-    def _obtener_nodos_seleccionados(self):
+    def _obtener_nodos_fuente_seleccionados(self):
         indices = self._vista.selectedIndexes()
-        modelo = self._vista.model()
-        nodos = [modelo.itemFromIndex(i) for i in indices if i.column() == 0]
+        proxy_model = self._vista.model()
+        nodos = []
+        for i in indices:
+            if i.column() == 0:
+                source_index = proxy_model.mapToSource(i)
+                item = self._modelo_fuente.itemFromIndex(source_index)
+                if item and item not in nodos:
+                    nodos.append(item)
         return nodos
 
-    def _obtener_destino(self):
+    def _obtener_destino_fuente(self):
         indices = self._vista.selectedIndexes()
         if not indices:
-            return self._vista.model().invisibleRootItem()
-        modelo = self._vista.model()
-        return modelo.itemFromIndex(indices[0])
-
-def _ejecutar_pegado(pila, vista, portapapeles, destino):
-    pass
-
-def _ejecutar_eliminacion(pila, vista, nodos):
-    pass
+            return self._modelo_fuente.invisibleRootItem()
+        
+        proxy_model = self._vista.model()
+        source_index = proxy_model.mapToSource(indices[0])
+        item = self._modelo_fuente.itemFromIndex(source_index)
+        return item if item else self._modelo_fuente.invisibleRootItem()
