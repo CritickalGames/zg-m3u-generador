@@ -71,8 +71,6 @@ class ROMOrganizerApp(QMainWindow):
         self._barra_superior.conectar_escanear(self._ejecutar_escaneo)
         self._barra_superior.conectar_generar(self._ejecutar_generacion)
         self._panel_logico._buscador.textChanged.connect(self._panel_logico.filtrar)
-        
-        # Activar atajos
         configurar_atajos(self, self._editor)
 
     def _precargar_ruta(self):
@@ -122,14 +120,20 @@ class ROMOrganizerApp(QMainWindow):
             self._barra_estado.mostrar_error(str(e))
 
     def _ejecutar_generacion(self):
-        ruta_base = self._barra_superior.obtener_ruta()
-        destino = QFileDialog.getExistingDirectory(self, "Seleccionar carpeta de destino", ruta_base)
+        # 1. Ruta inicial: la usada en el escaneo (o fallback a config)
+        ruta_inicial = self._barra_superior.obtener_ruta()
+        if not ruta_inicial:
+            ruta_inicial = self._config.get("ruta_por_defecto", "")
+            
+        # 2. Diálogo idéntico al de "Buscar", pero con título distinto
+        destino = QFileDialog.getExistingDirectory(self, "Seleccionar carpeta de destino para .m3u", ruta_inicial)
         if not destino:
             return
+            
         try:
             fran, games, dir_salida = generar_archivos_m3u(
                 self._panel_logico.obtener_modelo_fuente(),
-                ruta_base,
+                ruta_inicial, # Se mantiene como base para rutas relativas
                 destino,
                 self._config.get("m3u_solo_multidisco", False)
             )

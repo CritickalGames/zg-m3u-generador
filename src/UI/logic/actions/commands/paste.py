@@ -23,7 +23,6 @@ class ComandoPegar(QUndoCommand):
 def _clonar_nodo(nodo):
     copia = QStandardItem(nodo.text())
     copia.setEditable(nodo.isEditable())
-    # Copiar roles de datos personalizados
     for rol in [Qt.ItemDataRole.UserRole, Qt.ItemDataRole.UserRole + 1]:
         dato = nodo.data(rol)
         if dato is not None:
